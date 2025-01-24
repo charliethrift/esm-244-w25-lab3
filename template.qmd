@@ -1,6 +1,6 @@
 ---
-title: "Lab 3 Key"
-author: "Nathaniel Grimes"
+title: "Lab 3"
+author: "Charlie Thrift"
 format: html
 ---
 ## Load in data and packages
@@ -18,7 +18,39 @@ t_df<-read_csv(here("data", "titanic_survival.csv"))
 
 Write a description of how you go about applying machine learning problems. If you drew a diagram, share with a neighbor and discuss.
 
+*To apply machine learning, we need to subset our data into a training and testing dataset.*
 
+1. Ask your research question
+
+2. Gather data
+
+3. Hypothesize
+
+4. Exploratory data analysis
+
+5. Methods: pseudocode
+
+6. Choose metrics
+
+7. Data split, to train and test
+
+8. Build Models
+
+    a. Create our model options and variables
+    
+    b. Data preprocessing
+    
+    c. Train model
+    
+    d. Tune our model
+    
+    e. Evaluate performance
+    
+    f. Model selection (including cross-fold validation)
+    
+9. Finalize the model (train it on whole dataset)
+
+10. Interpret results/visualize/communicate
 
 
 ## Tidymodels Overview
@@ -41,11 +73,53 @@ In real life, we would have to go out and collect the data. Today, we will use t
 
 Take 15 minutes to explore the data. Are there any immediate changes to the data that we need to change? What relationships can you see through graphs? What variables could be of interest to predict survival of passengers on the Titanic?
 
+```{r}
+ggplot(t_df, aes(x=age,y=survived))+
+  geom_point()
+ # geom_point(data=t_df, aes(x=fare,y=survived))
+
+t_df_survived <- subset(t_df, survived == 1)
+t_df_dead <- subset(t_df, survived == 0)
+
+ggplot(t_df_survived, aes(age))+
+  geom_density(color = "blue")+
+  geom_density(data=t_df_dead,aes(x=age),color="red")+
+  theme_minimal()+
+  labs(title="age of survivors (blue) and dead (red)")
+
+ggplot(t_df, aes(sex,survived))+
+  geom_count(color = "blue")
+
+t_df_1 <- t_df
+t_df_1$survive <- NA
+t_df_1$survive[t_df$survived == 1] <- "Yes"
+t_df_1$survive[t_df$survived == 0] <- "No"
+
+ggplot(t_df_1, aes(sex,survive))+
+  geom_count(color = "blue",)+
+  theme_minimal()
+
+ggplot(t_df_1, aes(pclass,survive))+
+  geom_count(color = "blue",)+
+  theme_minimal()
+
+ggplot(t_df_1, aes(pclass,fill=survive))+
+  geom_bar(position="fill")
+```
+
 
 
 ## Data Split
 
 We will set aside (“partition”) a portion of the data for building and comparing our models (80%), and a portion for testing our models after we’ve selected the best one (20%). NOT the same as folds - that will happen in the training/validation step.
+
+```{r}
+surv_df <- t_df %>%
+  mutate(survived = factor(survived),
+         pclass = factor(pclass)) %>%
+  select(-cabin,-ticket)
+```
+
 
 ```{r}
 ### Check balance of survived column
@@ -112,18 +186,18 @@ glm_rec<-recipe(survived ~ sex + pclass, data = surv_train_df)
 
 lasso_rec<-recipe(survived~.,data=surv_train_df) %>%
   update_role(passenger_id, new_role = "ID") %>%
-  step_rm(name,age) %>%
+  step_rm(name,age) %>% # this removes these variables from our model
   step_unknown(all_nominal(),-all_outcomes()) |> 
   step_dummy(all_nominal(),-all_outcomes()) |>
   step_zv(all_numeric(),-all_outcomes()) |> 
-  step_normalize(all_numeric(),-all_outcomes())
+  step_normalize(all_numeric(),-all_outcomes()) # numeric data needs to be normalized in lasso regression
 
 ```
 
 
 ### Train Model
 
-First we create a workflow that combines all the models and the receipes to control the data. Then we use that consistent pattern to fit our model. First let's compare the models one time. Add comments to the following code chunk to describe what each step is doing. Feel free to run code.
+First we create a workflow that combines all the models and the recipes to control the data. Then we use that consistent pattern to fit our model. First let's compare the models one time. Add comments to the following code chunk to describe what each step is doing. Feel free to run code.
 
 ```{r}
 # First the logistic regression
@@ -146,9 +220,19 @@ table(log_test$survived, log_test$.pred_class)
 
 Now fill in the following code chunk to fit the lasso model. Create a table (or sometimes called a confusion matrix) that shows the predicted values versus the actual values.
 
-
 ```{r}
+lasso_wf <- workflow() %>%
+  add_recipe(lasso_rec) %>%
+  add_model(lasso_md) 
 
+lasso_fit<-lasso_wf %>%
+  fit(surv_train_df)
+
+lasso_test<-surv_test_df |>
+  mutate(predict(lasso_fit, new_data = surv_test_df)) |> 
+  mutate(predict(lasso_fit,new_data = surv_test_df, type='prob'))
+
+table(lasso_test$survived, lasso_test$.pred_class)
 
 ```
 
@@ -168,7 +252,11 @@ lasso_test |>
 Calculate the `ROC AUC` for each model. Use the `roc_auc` function from yardstick.
 
 ```{r}
+log_test |> 
+  roc_auc(truth = survived, .pred_0)
 
+lasso_test |>
+  roc_auc(truth = survived, .pred_0)
 ```
 
 
@@ -183,7 +271,7 @@ set.seed(12)
 
 folds<-vfold_cv(surv_train_df, v=10, strata = survived)
 
-log_fit_folds<- log_fit |> 
+log_fit_folds<- log_wf |> 
   fit_resamples(folds)
 
 collect_metrics(log_fit_folds)
@@ -216,6 +304,8 @@ We will finalize the model by fitting the model to the entire dataset.
 ```{r}
 final_log<-log_wf |>
   last_fit(surv_split)
+useable_log <- final_log %>%
+  extract_fit_parsnip()
 ```
 
 
@@ -229,7 +319,7 @@ final_log |>
   extract_fit_parsnip() |>
   tidy() |> 
   mutate(odds=exp(estimate),
-         prob=odds/(1+estimate))
+         prob=odds/(1+odds))
 ```
 
 Please give this a go on your own with the post-lab exercise. I will be walking around to assist.
